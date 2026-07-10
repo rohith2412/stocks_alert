@@ -3,7 +3,7 @@
 // edgar_watcher.ts: fetch -> dedupe -> match -> format -> send -> save state.
 
 import { sendTelegram, loadSeen, saveSeen, escapeHtml, truncate, sleep } from './lib.ts';
-import { WATCHLIST, CORE_SYMBOLS, PEER_MAP, BIG_EVENTS } from './watchlist.ts';
+import { WATCHLIST, CORE_SYMBOLS, PEER_MAP, BIG_EVENTS, TRUMP_TERMS } from './watchlist.ts';
 
 const SEEN_PATH = 'seen_news.json';
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
@@ -37,6 +37,7 @@ interface Match {
   tickers: Set<string>;
   reasons: string[];
   triggers: string[];
+  trump: boolean; // article ties a specific company to Trump / the White House
 }
 
 async function fetchJson(url: string): Promise<Article[]> {
@@ -62,7 +63,7 @@ function fetchCompanyNews(symbol: string): Promise<Article[]> {
   );
 }
 
-function evaluate(article: Article): Match | null {
+export function evaluate(article: Article): Match | null {
   const text = `${article.headline} ${article.summary}`.toLowerCase();
   const relatedTickers = (article.related ?? '')
     .split(',')
@@ -97,26 +98,33 @@ function evaluate(article: Article): Match | null {
   }
 
   const triggers = BIG_EVENTS.filter((p) => wordMatch(text, p));
+  const trump = TRUMP_TERMS.some((t) => wordMatch(text, t));
 
-  if (tickers.size > 0) return { tickers, reasons, triggers };
+  // Curated hit — return it, noting a Trump tie-in if present.
+  if (tickers.size > 0) {
+    if (trump) reasons.unshift('🇺🇸trump');
+    return { tickers, reasons, triggers, trump };
+  }
 
-  // Big-event mode: news about ONE specific stock (a focused, non-roundup article
-  // with a related ticker) that mentions a major market-moving phrase — covers
-  // every sector for big events, not just the curated names.
-  if (triggers.length > 0 && relatedTickers.length > 0 && !isRoundup) {
+  // Otherwise fire on a focused single-stock article (has a related ticker, not a
+  // roundup) when it either mentions a big-event phrase OR ties the company to
+  // Trump / the White House — covers every sector for major, market-moving news.
+  if ((triggers.length > 0 || trump) && relatedTickers.length > 0 && !isRoundup) {
     return {
       tickers: new Set(relatedTickers.slice(0, 6)),
-      reasons: [`event:${triggers.join('/')}`],
+      reasons: [trump ? '🇺🇸trump-mention' : `event:${triggers.join('/')}`],
       triggers,
+      trump,
     };
   }
 
   return null;
 }
 
-function formatAlert(article: Article, match: Match): string {
+export function formatAlert(article: Article, match: Match): string {
   const when = new Date(article.datetime * 1000).toISOString();
   return [
+    match.trump ? `🇺🇸 <b>TRUMP SPOTLIGHT</b> 🇺🇸` : '',
     `📰 <b>Finnhub</b> — relevant to <b>${escapeHtml([...match.tickers].join(', '))}</b>`,
     `<b>${escapeHtml(article.headline)}</b>`,
     article.summary ? escapeHtml(truncate(article.summary, 300)) : '',
@@ -180,7 +188,10 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run when executed directly (not when imported by a test/probe).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

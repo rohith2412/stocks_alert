@@ -106,6 +106,11 @@ export const PEER_MAP: Record<string, string[]> = {
   'western digital': ['MU', 'SNDK'],
 };
 
+// Political spotlight: when the president names/attacks/endorses a specific
+// company, it moves the stock. If any of these appear alongside a specific
+// company, the article fires with a 🇺🇸 flag — even without a BIG_EVENT phrase.
+export const TRUMP_TERMS = ['trump', 'president trump', 'white house', 'oval office'];
+
 // Big market-moving phrases. These let news about ANY specific stock fire, even
 // if it's not on the curated list — so every sector is covered for major events.
 export const BIG_EVENTS = [

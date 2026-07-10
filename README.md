@@ -52,3 +52,4 @@ TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... FINNHUB_API_KEY=... npm run finnhub
 `.github/workflows/edgar-watcher.yml` and `finnhub-watcher.yml` run every 5 minutes
 via GitHub Actions cron, then commit the updated `seen_*.json` back to the repo to
 persist dedupe state between runs.
+# stocks_alert

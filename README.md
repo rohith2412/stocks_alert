@@ -15,14 +15,27 @@ Shared helpers live in `lib.ts`.
 
 ## Finnhub matching
 
-- **Watchlist (direct):** `SNDK, MU, SOXL, URA, TSLA` — matched by symbol, by
-  Finnhub's `related` field, or by company name (e.g. "Micron" → MU).
+Scope: **US + Canadian listings, all sectors, weighted to Tech + Semis.** The full
+watchlist and rules live in `watchlist.ts`.
+
+- **Curated watchlist (direct):** ~70 major US + Canadian names across every sector
+  (semis, big tech, energy/materials, financials incl. Canadian banks, healthcare,
+  consumer/industrials). Matched by company-name alias (word-boundary) or by
+  Finnhub's structured `related` field. Canadian names are matched via their
+  US-listed tickers (e.g. `SHOP`, `RY`, `ENB`, `CNQ`).
 - **Sector/peer map (indirect):** memory-sector peers (SK Hynix, Samsung, Western
-  Digital/WDC, Kioxia) fire an alert flagged as relevant to `MU`/`SNDK`.
-- **Trigger phrases:** `going public, IPO, guidance, downgrade, upgrade` are
-  surfaced as tags. By default an article must still hit a ticker or peer to fire
-  (keeps the general feed quiet). To also fire on phrase-only matches, see the note
-  in `evaluate()` in `finnhub_watcher.ts`.
+  Digital, Kioxia) fire an alert flagged as relevant to `MU`/`SNDK`.
+- **Big-event mode:** market-moving phrases (`IPO, merger, acquisition, buyout,
+  upgrade, downgrade, guidance, bankruptcy, trading halt, FDA approval, earnings
+  beat/miss`, …) let news about *any* specific stock fire, so every sector is
+  covered for major events — not just the curated names.
+- **Noise guards:** market-roundup articles (many tickers in `related`) require a
+  name match, not a bare symbol match. Deep per-company polling is limited to the
+  core picks in `CORE_SYMBOLS`; everything else rides the general feed.
+
+**Free-tier limit:** the general news feed returns only the ~100 latest articles,
+so all-sector coverage catches big names when they surface there — it is not an
+exhaustive scan of every listed stock.
 
 ## Setup
 

@@ -3,37 +3,18 @@
 // edgar_watcher.ts: fetch -> dedupe -> match -> format -> send -> save state.
 
 import { sendTelegram, loadSeen, saveSeen, escapeHtml, truncate, sleep } from './lib.ts';
+import { WATCHLIST, CORE_SYMBOLS, PEER_MAP, BIG_EVENTS } from './watchlist.ts';
 
 const SEEN_PATH = 'seen_news.json';
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
-// Tickers we alert on directly.
-const WATCHLIST = ['SNDK', 'MU', 'SOXL', 'URA', 'TSLA'];
+const WATCHLIST_TICKERS = Object.keys(WATCHLIST);
 
-// Company-name aliases so headlines that use the name (not the symbol) still hit.
-// SOXL is a leveraged ETF with no company name, so it matches by symbol only.
-const TICKER_NAMES: Record<string, string[]> = {
-  SNDK: ['sandisk'],
-  MU: ['micron'],
-  URA: ['uranium'],
-  TSLA: ['tesla'],
-};
-
-// Sector/peer map: when a peer entity shows up, fire an alert flagged as relevant
-// to the mapped watchlist tickers — even if those tickers aren't in the text.
-const PEER_MAP: Record<string, string[]> = {
-  'sk hynix': ['MU', 'SNDK'],
-  hynix: ['MU', 'SNDK'],
-  'samsung electronics': ['MU', 'SNDK'],
-  samsung: ['MU', 'SNDK'],
-  'western digital': ['MU', 'SNDK'],
-  wdc: ['MU', 'SNDK'],
-  kioxia: ['MU', 'SNDK'],
-};
-
-// Extra context phrases. These are surfaced as tags on an alert; by default an
-// article must still hit a ticker or peer to fire (keeps the general feed quiet).
-const TRIGGER_PHRASES = ['going public', 'ipo', 'guidance', 'downgrade', 'upgrade'];
+/** True if `needle` appears in `text` as a whole word/phrase. */
+function wordMatch(text: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+}
 
 // Only alert on articles published within this window. Older matches are recorded
 // as seen (silently) so the first run doesn't flood the channel with days of
@@ -82,7 +63,7 @@ function fetchCompanyNews(symbol: string): Promise<Article[]> {
 }
 
 function evaluate(article: Article): Match | null {
-  const text = `${article.headline} ${article.summary} ${article.related}`.toLowerCase();
+  const text = `${article.headline} ${article.summary}`.toLowerCase();
   const relatedTickers = (article.related ?? '')
     .split(',')
     .map((s) => s.trim().toUpperCase())
@@ -91,12 +72,17 @@ function evaluate(article: Article): Match | null {
   const tickers = new Set<string>();
   const reasons: string[] = [];
 
-  // Direct watchlist matches (by symbol, by Finnhub's `related` field, or by name).
-  for (const t of WATCHLIST) {
-    const bySymbol =
-      relatedTickers.includes(t) || new RegExp(`\\b${t.toLowerCase()}\\b`).test(text);
-    const byName = (TICKER_NAMES[t] ?? []).some((name) => text.includes(name));
-    if (bySymbol || byName) {
+  // Market-roundup articles list many tickers in `related` (e.g. "top movers
+  // today"). For those, a bare symbol match is weak/misleading, so require a
+  // name match instead. `isRoundup` gates symbol-only matches.
+  const isRoundup = relatedTickers.length > 8;
+
+  // Curated watchlist matches: by company-name alias (word-boundary in text) or
+  // by symbol (from Finnhub's structured `related` field, unless it's a roundup).
+  for (const t of WATCHLIST_TICKERS) {
+    const byName = WATCHLIST[t].some((name) => wordMatch(text, name));
+    const bySymbol = relatedTickers.includes(t) && !isRoundup;
+    if (byName || bySymbol) {
       tickers.add(t);
       reasons.push(`direct:${t}`);
     }
@@ -104,19 +90,28 @@ function evaluate(article: Article): Match | null {
 
   // Sector/peer matches — indirect relevance.
   for (const [peer, mapped] of Object.entries(PEER_MAP)) {
-    if (text.includes(peer)) {
+    if (wordMatch(text, peer)) {
       for (const t of mapped) tickers.add(t);
       reasons.push(`peer:${peer}→${mapped.join('/')}`);
     }
   }
 
-  const triggers = TRIGGER_PHRASES.filter((p) => text.includes(p));
+  const triggers = BIG_EVENTS.filter((p) => wordMatch(text, p));
 
-  // Require a ticker/peer hit to fire. Flip this to also fire on `triggers.length`
-  // if you want pure phrase matches (noisier on the general feed).
-  if (tickers.size === 0) return null;
+  if (tickers.size > 0) return { tickers, reasons, triggers };
 
-  return { tickers, reasons, triggers };
+  // Big-event mode: news about ONE specific stock (a focused, non-roundup article
+  // with a related ticker) that mentions a major market-moving phrase — covers
+  // every sector for big events, not just the curated names.
+  if (triggers.length > 0 && relatedTickers.length > 0 && !isRoundup) {
+    return {
+      tickers: new Set(relatedTickers.slice(0, 6)),
+      reasons: [`event:${triggers.join('/')}`],
+      triggers,
+    };
+  }
+
+  return null;
 }
 
 function formatAlert(article: Article, match: Match): string {
@@ -142,7 +137,7 @@ async function main(): Promise<void> {
   // Merge general news + per-ticker company news, deduped by article id.
   const articles = new Map<string, Article>();
   for (const a of await fetchGeneralNews()) articles.set(String(a.id), a);
-  for (const sym of WATCHLIST) {
+  for (const sym of CORE_SYMBOLS) {
     for (const a of await fetchCompanyNews(sym)) articles.set(String(a.id), a);
     await sleep(300); // gentle on the free-tier rate limit (60 req/min)
   }
